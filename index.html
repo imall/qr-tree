@@ -4,62 +4,286 @@
 <script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
 <style>
   body{margin:0;background:#f2efe4;font:14px system-ui;display:flex;flex-direction:column;align-items:center;gap:12px}
-  canvas{max-width:100%}
+  canvas{max-width:100%;cursor:pointer}
+  #hint{padding:7px 16px;border:1px solid #ddd7c6;border-radius:999px;color:#6b6455;background:#faf7ee;user-select:none}
   input{width:min(90vw,420px);padding:10px 14px;border:1px solid #d8d2c0;border-radius:10px;font:inherit}
 </style>
-<canvas id=c width=1200 height=820></canvas>
+<canvas id=c width=1200 height=900></canvas>
+<div id=hint>點擊樹看 QR code</div>
 <input id=t value="https://github.com">
 <script>
-const TW = 13, TH = 6.5, LIFT = 11;          // 等角地磚半寬 / 半高 / 黑模組抬升高度
+const CX = 600;                              // 場景原點的水平位置
+// 樹拉高後等角視角會頂出畫布，所以原點高度也要隨相機走：
+// 斜看時場景壓低留出樹的空間，升到正上方時回到畫布正中央。
+const CY0 = 640, CY1 = 450;
+const PITCH0 = Math.PI / 6, PITCH1 = Math.PI / 2;   // 仰角 30°（等角）→ 90°（正上方）
+const YAW0 = Math.PI / 4, YAW1 = 0;                 // 方位角 45°（等角）→ 0°（軸對齊）
+const DUR = 1100;                            // 動畫全程毫秒
+// 樹的形狀旋鈕。葉子水平位置被 QR 綁死，樹長什麼樣只能靠高度。
+// 樹冠只覆蓋 QR 中間 TREE_R 這圈，外圈的深色模組交給草，所以樹冠寬度不再被整個 QR 綁死。
+let TREE_R = 0.62;
+// 樹幹高 / 樹冠高，單位是 QR 格數。BLOBS = 樹冠由幾團葉叢疊成。
+// 樹的螢幕高寬比 =（TRUNK + CROWN）× 0.612 / TREE_R，與縮放無關。
+let TRUNK = 0.22, CROWN = 0.62, BLOBS = 8;
+// 同一格疊多片：正上方只看得到最上面那片，QR 不受影響，側看才有厚度。
+// 層距與抖動的單位是「格」且必須遠小於 1 —— z 差 1 格會讓葉子在螢幕上位移
+// cos(pitch)·S ≈ 16px，比一片葉子的螢幕高度還大，相鄰葉子就會被扯開變得稀疏。
+// 樹葉只剩中間那圈，格數少很多，層數可以給得大方一點把樹冠填實。
+// 樹冠先天有一半是洞（QR 的深色比例），葉子又不能放大，
+// 所以只能靠層厚讓葉子在螢幕上彼此重疊，把洞打散。
+let LAYERS = 20, SPACING = 0.45, JITTER = 0.3;
+// 地板由裡到外三圈：QR、淺色鋪面靜區、草地。
+// QUIET 不可小於 4 —— QR 規格要求四周至少 4 個模組寬的淺色留白，
+// 草地是深綠，直接貼著 QR 會吃掉留白，掃描器就找不到邊界。
+const QUIET = 4, TUFT_BLADES = 3;            // 靜區寬度（格）/ 每個草格幾片草葉
+const LEAF_BUDGET = 3900;                    // 葉片總數上限，超過就自動降層數保幀率
+const BLADE_BUDGET = 1100;                   // 草葉總數上限；草格的底塊是 QR 正確性，永遠不能省
 const ctx = c.getContext('2d');
+
+// yaw=45° 時一格半寬剛好回到原本的 13px；格數太多就縮小，免得正視時撐出畫布
+let S = 13 * Math.SQRT2;
+let pitch = PITCH0, yaw = YAW0, branchAlpha = 1, CY = CY0;
+
+// hsl 字串每次都要重新解析；預先轉成 hex 可省下約 15% 的繪製時間
+const cvt = document.createElement('canvas').getContext('2d');
+const hex = s => { cvt.fillStyle = s; return cvt.fillStyle; };
 
 const hash = s => [...s].reduce((h, ch) => Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0, 2166136261);
 const rng = seed => () => (seed = Math.imul(seed ^ seed >>> 15, seed | 1), ((seed ^ seed >>> 7) >>> 0) / 4294967296);
 
-const iso = (x, y, z) => [600 + (x - y) * TW, 470 + (x + y) * TH - z];
-
-function tile(x, y, dark){                   // 一個 QR module = 一塊有厚度的地磚
-  const z = dark ? LIFT : 0, d = z + 8;      // d = 側面往下延伸的深度
-  const [px, py] = iso(x, y, z);
-  const face = (pts, fill) => {
-    ctx.fillStyle = fill; ctx.beginPath();
-    pts.forEach(([a, b], i) => i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)); ctx.fill();
-  };
-  face([[px, py - TH], [px + TW, py], [px, py + TH], [px - TW, py]], dark ? '#3a3226' : '#e8e3d3'); // 頂面
-  face([[px - TW, py], [px, py + TH], [px, py + TH + d], [px - TW, py + d]], dark ? '#2a231a' : '#cdc7b4'); // 左側
-  face([[px + TW, py], [px, py + TH], [px, py + TH + d], [px + TW, py + d]], dark ? '#221c15' : '#bdb7a4'); // 右側
+// 正交投影：先繞垂直軸轉 yaw，再依 pitch 壓扁進深、把高度往螢幕上方帶
+function project(x, y, z){
+  const rx = x * Math.cos(yaw) - y * Math.sin(yaw);
+  const ry = x * Math.sin(yaw) + y * Math.cos(yaw);
+  return [CX + rx * S, CY + ry * Math.sin(pitch) * S - z * Math.cos(pitch) * S];
 }
 
-function branch(x, y, angle, len, depth, rand){
-  if (depth === 0 || len < 4) return;
-  const x2 = x + Math.cos(angle) * len, y2 = y + Math.sin(angle) * len;
-  ctx.strokeStyle = '#5a4632'; ctx.lineWidth = depth * 1.1; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x2, y2); ctx.stroke();
-  if (depth <= 3){                           // 末端長葉子
-    ctx.fillStyle = `hsl(${95 + rand() * 35} ${45 + rand() * 25}% ${32 + rand() * 22}%)`;
-    ctx.beginPath(); ctx.arc(x2, y2, 7 + rand() * 9, 0, 7); ctx.fill();
-  }
-  const spread = 0.45 + rand() * 0.35;
-  branch(x2, y2, angle - spread, len * (0.7 + rand() * 0.12), depth - 1, rand);
-  branch(x2, y2, angle + spread, len * (0.7 + rand() * 0.12), depth - 1, rand);
-  if (rand() > 0.7) branch(x2, y2, angle + (rand() - 0.5) * 0.3, len * 0.6, depth - 1, rand);
+// 沿視線方向的距離，小的在遠方要先畫（畫家演算法）
+function depth(x, y, z){
+  const ry = x * Math.sin(yaw) + y * Math.cos(yaw);
+  return ry * Math.cos(pitch) + z * Math.sin(pitch);
 }
 
-function render(text){
-  const qr = qrcode(0, 'H');                 // H = 30% 容錯，樹遮住的模組靠它補回來
-  qr.addData(text); qr.make();
+function quad(p){                            // 水平四邊形，地板磚與（之後的）葉子共用
+  ctx.fillStyle = p.fill; ctx.beginPath();
+  [[-1,-1],[1,-1],[1,1],[-1,1]].forEach(([dx, dy], i) => {
+    const [a, b] = project(p.x + dx * p.half, p.y + dy * p.half, p.z);
+    i ? ctx.lineTo(a, b) : ctx.moveTo(a, b);
+  });
+  ctx.fill();
+}
+
+function seg(p){                              // 3D 線段（樹枝）
+  const [ax, ay] = project(p.a[0], p.a[1], p.a[2]);
+  const [bx, by] = project(p.b[0], p.b[1], p.b[2]);
+  ctx.strokeStyle = p.grass || '#5a4632'; ctx.lineWidth = p.w; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+}
+
+// 只有相機在動：0 是斜看的樹，1 是正上方的 QR。場景本身完全靜止。
+function setT(v){
+  morph = v;
+  pitch = PITCH0 + (PITCH1 - PITCH0) * v;
+  yaw = YAW0 + (YAW1 - YAW0) * v;
+  CY = CY0 + (CY1 - CY0) * v;
+  branchAlpha = 1 - v;                        // 樹枝要淡出，不然會壓在 QR 上
+}
+
+const ease = u => u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+
+let morph = 0, gen = 0;                       // t 這個名字被 <input id=t> 佔走了
+
+function animateTo(to){
+  const from = morph, start = performance.now(), me = ++gen;
+  const dur = Math.max(1, DUR * Math.abs(to - from));   // 中途反轉時不用等整段
+  (function step(now){
+    if (me !== gen) return;                   // 已被更新的點擊接手
+    const u = Math.min(1, (now - start) / dur);
+    setT(from + (to - from) * ease(u));
+    draw();
+    if (u < 1) requestAnimationFrame(step);
+  })(start);
+}
+
+const norm = v => { const m = Math.hypot(v[0], v[1], v[2]); return [v[0] / m, v[1] / m, v[2] / m]; };
+
+// 長出 3D 樹枝：只在水平方向擾動方向向量，所以永遠往上長並逐層外擴
+function grow(rand, targetH){
+  const segs = [];
+  (function rec(a, dir, len, depth){
+    if (depth === 0 || len < 0.01) return;
+    const b = [a[0] + dir[0] * len, a[1] + dir[1] * len, a[2] + dir[2] * len];
+    segs.push({ a, b, w: depth * 1.7 });      // 樹矮了，樹幹要粗才撐得起樹冠
+    const az = rand() * Math.PI * 2, spread = 0.22 + rand() * 0.16;  // 收窄，免得戳出樹冠
+    const kid = k => norm([dir[0] + Math.cos(az) * spread * k,
+                           dir[1] + Math.sin(az) * spread * k,
+                           dir[2] * 0.82]);         // 每層壓低一點，樹冠才會攤開
+    rec(b, kid(1), len * (0.7 + rand() * 0.12), depth - 1);
+    rec(b, kid(-1), len * (0.7 + rand() * 0.12), depth - 1);
+    if (rand() > 0.7) rec(b, kid(0.3), len * 0.6, depth - 1);
+  })([0, 0, 0], [0, 0, 1], 1, 8);             // 深度 9 會多出上千段被樹冠遮住的細枝，純浪費
+  const k = targetH / segs.reduce((m, s) => Math.max(m, s.b[2]), 0);
+  segs.forEach(s => { s.a = s.a.map(v => v * k); s.b = s.b.map(v => v * k); });
+  return segs;
+}
+
+let prims = [], leaves = [], floor = null, darkKeys = new Set(), grassKeys = new Set();
+
+// 掃得到的前提：每個深色模組都被蓋住 —— 中間那些靠樹葉、外圈那些靠草，
+// 兩邊聯集必須剛好等於深色模組集合，不重疊也不遺漏。
+// 層數是按需分配的，所以只比對落點集合，不比對總片數。
+function selfCheck(){
+  const byLeaf = new Set(leaves.map(L => `${L.x},${L.y}`));
+  const overlap = [...byLeaf].filter(k => grassKeys.has(k)).length;
+  const union = new Set([...byLeaf, ...grassKeys]);
+  console.assert(
+    overlap === 0 && union.size === darkKeys.size && [...darkKeys].every(k => union.has(k)),
+    'selfCheck 失敗：樹葉與草的聯集沒有蓋滿 QR 深色模組',
+    { 樹葉格: byLeaf.size, 草格: grassKeys.size, 聯集: union.size, 深色格: darkKeys.size, 重疊: overlap });
+
+  // 畫家演算法只在圖元大小相近時成立：某片四邊形若遠大於其他，
+  // 用中心點算出的深度會讓它整片蓋掉比它遠的東西（曾經讓遠端一半的草消失）。
+  const oversized = prims.filter(p => !p.b && p.half > 1.5);
+  console.assert(oversized.length === 0,
+    'selfCheck 失敗：有過大的四邊形進了深度排序，會蓋掉比它遠的圖元',
+    { 過大圖元: oversized.length, 最大half: Math.max(0, ...oversized.map(p => p.half)) });
+}
+
+function build(src){                          // 依輸入內容建一次場景，之後每幀只重投影
+  const qr = qrcode(0, 'H');
+  qr.addData(src); qr.make();
   const n = qr.getModuleCount(), mid = (n - 1) / 2;
-  ctx.clearRect(0, 0, c.width, c.height);
-  for (let s = 0; s < 2 * n; s++)            // 由後往前畫（畫家演算法）
-    for (let x = 0; x < n; x++){
-      const y = s - x;
-      if (y >= 0 && y < n) tile(x - mid, y - mid, qr.isDark(y, x));
+  const rand = rng(hash(src));
+  const edge = mid + QUIET;                   // 整塊地板的半寬（格）：QR + 淺色靜區
+  S = Math.min(13 * Math.SQRT2, 620 / (2 * edge + 1));   // 正視時整塊地板要塞得進畫布
+  prims = [];
+  // 地板用「一塊大四邊形 + 只畫深色格」，不逐格鋪滿：
+  // 長網址逐格要 4000+ 次 fill，但其中八成是同一個顏色，而 canvas 2D 的
+  // fill 呼叫次數就是幀率的硬上限（實測固定色 12000 次仍要 15ms）。
+  // 極小的 z 差只是用來讓深度排序分出上下，視覺上仍是同一個平面。
+  // 底板不進 prims：它是一塊 half 十幾格的巨大四邊形，深度卻只能用中心點算，
+  // 一起排序會把所有比場景中心遠的圖元整片蓋掉。它就是最底層，draw 時單獨先畫。
+  floor = { x: 0, y: 0, z: 0, half: edge + 0.5, fill: '#efebdc' };
+
+  // 深色模組由草和樹葉分工：外圈交給草、內圈交給樹葉。
+  // 分界乘上一點角度雜訊，免得草地邊界是一個完美的圓。
+  const q1 = rand() * 7, q2 = rand() * 7;
+  const cells = [], grassCells = [];
+  for (let gy = -mid; gy <= mid; gy++)
+    for (let gx = -mid; gx <= mid; gx++)
+      if (qr.isDark(gy + mid, gx + mid)){      // 淺色格由底下那塊大鋪面提供，不用畫
+        const r = Math.hypot(gx, gy) / mid, th = Math.atan2(gy, gx);
+        const bound = TREE_R * (1 + 0.16 * Math.sin(th * 3 + q1) + 0.10 * Math.sin(th * 5 + q2));
+        (r <= bound ? cells : grassCells).push([gx, gy]);
+      }
+  darkKeys = new Set([...cells, ...grassCells].map(([x, y]) => `${x},${y}`));
+  grassKeys = new Set(grassCells.map(([x, y]) => `${x},${y}`));
+
+  // 草的格子先墊一塊滿格綠色：草葉是線段，撐不滿一格，
+  // 少了這塊底從正上方看那格會漏出淺色鋪面，QR 直接錯一個模組。
+  // 草格多的時候（長網址）每格少長幾片葉，否則光草就吃掉一半的圖元預算
+  const blades = Math.max(1, Math.min(TUFT_BLADES, Math.floor(BLADE_BUDGET / Math.max(1, grassCells.length))));
+  for (const [gx, gy] of grassCells){
+    // 草的亮度上限要跟樹葉同級：草也是 QR 的深色模組，
+    // 太亮會直接拉低整張碼的符號對比（實測開到 46% 亮度就掉到 35%）。
+    prims.push({ x: gx, y: gy, z: 0.002, half: 0.5,
+                 fill: hex(`hsl(${85 + rand() * 22} ${50 + rand() * 22}% ${21 + rand() * 11}%)`) });
+    for (let b = 0; b < blades; b++)           // 草葉：複用樹枝的 3D 線段圖元，不新增型別
+      prims.push({ a: [gx + (rand() - 0.5) * 0.6, gy + (rand() - 0.5) * 0.6, 0.002],
+                   b: [gx + (rand() - 0.5) * 0.9, gy + (rand() - 0.5) * 0.9, 0.8 + rand() * 1.4],
+                   w: 2.0, grass: hex(`hsl(${85 + rand() * 28} ${52 + rand() * 24}% ${23 + rand() * 12}%)`) });
+  }
+  for (const [gx, gy] of cells)               // 樹下的地磚，維持淡淡的 QR 紋理
+    prims.push({ x: gx, y: gy, z: 0.002, half: 0.5, fill: '#dfd9c6' });
+
+  const trunkH = n * TRUNK, crownH = n * CROWN;
+  prims.push(...grow(rand, trunkH + crownH * 0.55));  // 樹枝要伸進樹冠裡，太矮會在樹冠下露一截
+
+  // 葉子永遠待在自己那格 QR 的正上方，水平位置與尺寸都不動；樹的形狀完全由高度決定。
+  // 用「到中心的距離」算高度必然是旋轉對稱的錐形，怎麼揉都還是個金字塔，
+  // 所以改成疊幾團球狀葉叢，像真樹的分叉樹冠，天生就不對稱。
+  const crownR = mid * TREE_R;                // 樹冠半徑只到樹葉那圈，不是整個 QR
+  const blobs = [];
+  for (let i = 0; i < BLOBS; i++){
+    // 第一團釘在正中央：全部隨機擺會抽到整個樹冠偏一邊、跟樹幹脫節
+    const a = rand() * Math.PI * 2, d = i === 0 ? 0 : Math.sqrt(rand()) * crownR * 0.5;
+    blobs.push({ x: Math.cos(a) * d, y: Math.sin(a) * d,
+                 z: trunkH + crownH * (0.15 + rand() * 0.6),
+                 rad: crownR * (0.55 + rand() * 0.35) });
+  }
+  // 下限抬到樹冠底部：離所有葉叢都遠的格子若讓高度一路衰減到地面，
+  // 多層疊起來會變成一條從樹冠垂到地上的葉鏈，看起來像藤蔓不像樹。
+  const crownFloor = trunkH + crownH * 0.18;
+  const raw = cells.map(([cx, cy]) => {
+    let top = crownFloor;
+    for (const B of blobs){
+      const d = Math.hypot(cx - B.x, cy - B.y);
+      // 球內取球面高度，球外指數衰減 —— 直接掉回地面會讓樹冠斷成上下兩層
+      const h = d < B.rad ? B.z + Math.sqrt(B.rad * B.rad - d * d) * 0.55
+                          : B.z * Math.exp(-(d - B.rad) / (B.rad * 0.55));
+      top = Math.max(top, h);
     }
-  const rand = rng(hash(text));
-  const [tx, ty] = iso(0, 0, LIFT);
-  branch(tx, ty, -Math.PI / 2, 95, 9, rand); // 樹從 QR 正中央長出來
+    return top;
+  });
+  const k = (trunkH + crownH) / Math.max(...raw);   // 統一縮到目標樹高，免得頂出畫布
+  const crownBottom = crownFloor * k;         // 樹冠底面：葉子往下填到這裡就停
+
+  // 層數按需分配：疊層只是為了補住相鄰格之間的垂直縫隙，
+  // 樹冠平坦處一層就夠，陡處才需要疊。全域固定層數會畫幾萬個看不見的四邊形。
+  // 深色格越多，每格能分到的層數就越少 —— 每幀的 fill 次數是幀率的硬上限
+  const maxLayers = Math.max(2, Math.min(LAYERS, Math.floor(LEAF_BUDGET / cells.length)));
+  const topOf = new Map();
+  cells.forEach(([cx, cy], ci) => topOf.set(`${cx},${cy}`, raw[ci] * k));
+  leaves = [];
+  cells.forEach(([cx, cy], ci) => {
+    const top = raw[ci] * k;
+    let drop = 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]){
+      const nb = topOf.get(`${cx + dx},${cy + dy}`);
+      if (nb !== undefined) drop = Math.max(drop, top - nb);
+    }
+    const layers = Math.min(maxLayers, Math.max(15, Math.ceil(drop / SPACING) + 1));
+    for (let i = 0; i < layers; i++){
+      const z = top - i * SPACING;
+      // 往下填到樹冠底面就停，不是固定疊幾層 —— 固定疊會讓樹冠邊緣的格子
+      // 一路拖到地上變成藤蔓。i=0 一定畫，否則那格 QR 模組會缺。
+      if (i > 0 && z < crownBottom) break;
+      leaves.push({
+        x: cx, y: cy,                         // 水平位置永遠等於它那格 QR，不動
+        z: z + (rand() - 0.5) * JITTER,
+        half: 0.5,                            // 剛好一格，正上方看才能無縫拼出 QR
+        // 亮度上限壓在 40%：葉子就是 QR 的深色模組，太亮會讓符號對比掉到掃不動
+        fill: `hsl(${95 + rand() * 35} ${45 + rand() * 25}% ${22 + rand() * 18}%)`
+      });
+    }
+  });
+  prims.push(...leaves);
+  console.log(`${n}x${n} / 深色模組 ${darkKeys.size} 格 = 樹葉 ${cells.length} + 草 ${grassCells.length}`
+            + ` / 葉片 ${leaves.length} 片（平均 ${(leaves.length / cells.length).toFixed(1)} 層，上限 ${maxLayers}）`
+            + ` / 圖元 ${prims.length}`);
+  selfCheck();
 }
 
-t.oninput = () => render(t.value || ' ');
-render(t.value);
+function draw(){
+  ctx.clearRect(0, 0, c.width, c.height);
+  quad(floor);                                // 底板先畫，不參與排序
+  const bare = branchAlpha < 0.01;            // 全透明時整批跳過，省掉數千次描邊
+  for (const p of prims)                      // 線段用中點當深度
+    p.d = p.b ? depth((p.a[0] + p.b[0]) / 2, (p.a[1] + p.b[1]) / 2, (p.a[2] + p.b[2]) / 2)
+              : depth(p.x, p.y, p.z);
+  prims.sort((a, b) => a.d - b.d);
+  for (const p of prims){
+    if (!p.b) quad(p);                        // 地磚與葉子
+    else if (p.grass) seg(p);                 // 草叢屬於地景，不跟著樹枝淡出
+    else if (!bare) { ctx.globalAlpha = branchAlpha; seg(p); ctx.globalAlpha = 1; }
+  }
+}
+
+c.onclick = () => {
+  const to = morph < 0.5 ? 1 : 0;             // 同一顆按鈕來回切，中途點擊就地反轉
+  hint.textContent = to ? '點擊看樹' : '點擊樹看 QR code';
+  animateTo(to);
+};
+t.oninput = () => { build(t.value || ' '); setT(morph); draw(); };
+build(t.value); setT(0); draw();
 </script>

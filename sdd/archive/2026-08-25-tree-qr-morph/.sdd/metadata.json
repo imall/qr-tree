@@ -1,0 +1,151 @@
+{
+  "approval": {
+    "approval_model_version": 1,
+    "manifest_sha256": "ffea52e27f1fd676189408a41707cd146bf5680833cab478303137d6900541e2",
+    "state": "active"
+  },
+  "attestation": {
+    "attestation_version": 1,
+    "projection": {
+      "metadata": {
+        "approval": {
+          "approval_model_version": 1,
+          "manifest_sha256": "ffea52e27f1fd676189408a41707cd146bf5680833cab478303137d6900541e2",
+          "state": "active"
+        },
+        "last_operation": {
+          "kind": "archive",
+          "operation_id": "8a4944c8ecea1f83b3922d097a8b575ddebb063983c6a82459e7162b570ea4f9"
+        },
+        "metadata_version": 1,
+        "revision": null,
+        "terminal": {
+          "archive_date": "2026-08-25",
+          "destination_directory": "2026-08-25-tree-qr-morph",
+          "operation": {
+            "kind": "archive",
+            "operation_id": "8a4944c8ecea1f83b3922d097a8b575ddebb063983c6a82459e7162b570ea4f9"
+          },
+          "short_name": "tree-qr-morph",
+          "source_snapshot": {
+            "proposal_sha256": "f2afa658bbf87b73b04edb18773664c87f242f1a4497f9bbfbace54299d0bbcd",
+            "snapshot_digest": "50de34185773e612a1de4f507fe187a4dff5b162d08f44674d997affb6de90ec",
+            "snapshot_version": 1,
+            "tasks_sha256": "6d8e0120de10531b4e47dbefd014cfa5d99ec562b8dc890240f7975e67387cbf"
+          },
+          "source_status": "approved",
+          "summary": "點擊讓相機從等角升到正上方，靜止的樹自己顯現成可掃描的 QR：葉子與草不移動，深色模組由中間的樹葉與外圈的草分工覆蓋",
+          "terminal_metadata_version": 1,
+          "terminal_status": "completed",
+          "timestamp": "2026-08-25T14:44:29Z"
+        }
+      },
+      "status": "completed",
+      "tasks": [
+        {
+          "completed": true,
+          "ordinal": 1
+        },
+        {
+          "completed": true,
+          "ordinal": 2
+        },
+        {
+          "completed": true,
+          "ordinal": 3
+        },
+        {
+          "completed": true,
+          "ordinal": 4
+        },
+        {
+          "completed": true,
+          "ordinal": 5
+        },
+        {
+          "completed": true,
+          "ordinal": 6
+        },
+        {
+          "completed": true,
+          "ordinal": 7
+        },
+        {
+          "completed": true,
+          "ordinal": 8
+        },
+        {
+          "completed": true,
+          "ordinal": 9
+        },
+        {
+          "completed": true,
+          "ordinal": 10
+        },
+        {
+          "completed": true,
+          "ordinal": 11
+        },
+        {
+          "completed": true,
+          "ordinal": 12
+        },
+        {
+          "completed": true,
+          "ordinal": 13
+        },
+        {
+          "completed": true,
+          "ordinal": 14
+        },
+        {
+          "completed": true,
+          "ordinal": 15
+        },
+        {
+          "completed": true,
+          "ordinal": 16
+        },
+        {
+          "completed": true,
+          "ordinal": 17
+        },
+        {
+          "completed": true,
+          "ordinal": 18
+        }
+      ]
+    },
+    "projection_sha256": "bbc0b7fcc8533f8e1e0a9619164b3aa181e81ecc572873f4405def22b9569dca"
+  },
+  "last_operation": {
+    "kind": "archive",
+    "operation_id": "8a4944c8ecea1f83b3922d097a8b575ddebb063983c6a82459e7162b570ea4f9"
+  },
+  "metadata_version": 1,
+  "revision": null,
+  "terminal": {
+    "archive_date": "2026-08-25",
+    "destination_directory": "2026-08-25-tree-qr-morph",
+    "operation": {
+      "kind": "archive",
+      "operation_id": "8a4944c8ecea1f83b3922d097a8b575ddebb063983c6a82459e7162b570ea4f9"
+    },
+    "short_name": "tree-qr-morph",
+    "source_snapshot": {
+      "proposal_sha256": "f2afa658bbf87b73b04edb18773664c87f242f1a4497f9bbfbace54299d0bbcd",
+      "snapshot_digest": "50de34185773e612a1de4f507fe187a4dff5b162d08f44674d997affb6de90ec",
+      "snapshot_version": 1,
+      "tasks_sha256": "6d8e0120de10531b4e47dbefd014cfa5d99ec562b8dc890240f7975e67387cbf"
+    },
+    "source_status": "approved",
+    "summary": "點擊讓相機從等角升到正上方，靜止的樹自己顯現成可掃描的 QR：葉子與草不移動，深色模組由中間的樹葉與外圈的草分工覆蓋",
+    "terminal_metadata_version": 1,
+    "terminal_status": "completed",
+    "timestamp": "2026-08-25T14:44:29Z"
+  },
+  "writer": {
+    "engine": "sdd-workflow",
+    "version": "1.1.3"
+  }
+}
