@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>QR Tree</title>
+<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
+<style>
+  body{margin:0;background:#f2efe4;font:14px system-ui;display:flex;flex-direction:column;align-items:center;gap:12px}
+  canvas{max-width:100%}
+  input{width:min(90vw,420px);padding:10px 14px;border:1px solid #d8d2c0;border-radius:10px;font:inherit}
+</style>
+<canvas id=c width=1200 height=820></canvas>
+<input id=t value="https://github.com">
+<script>
+const TW = 13, TH = 6.5, LIFT = 11;          // 等角地磚半寬 / 半高 / 黑模組抬升高度
+const ctx = c.getContext('2d');
+
+const hash = s => [...s].reduce((h, ch) => Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0, 2166136261);
+const rng = seed => () => (seed = Math.imul(seed ^ seed >>> 15, seed | 1), ((seed ^ seed >>> 7) >>> 0) / 4294967296);
+
+const iso = (x, y, z) => [600 + (x - y) * TW, 470 + (x + y) * TH - z];
+
+function tile(x, y, dark){                   // 一個 QR module = 一塊有厚度的地磚
+  const z = dark ? LIFT : 0, d = z + 8;      // d = 側面往下延伸的深度
+  const [px, py] = iso(x, y, z);
+  const face = (pts, fill) => {
+    ctx.fillStyle = fill; ctx.beginPath();
+    pts.forEach(([a, b], i) => i ? ctx.lineTo(a, b) : ctx.moveTo(a, b)); ctx.fill();
+  };
+  face([[px, py - TH], [px + TW, py], [px, py + TH], [px - TW, py]], dark ? '#3a3226' : '#e8e3d3'); // 頂面
+  face([[px - TW, py], [px, py + TH], [px, py + TH + d], [px - TW, py + d]], dark ? '#2a231a' : '#cdc7b4'); // 左側
+  face([[px + TW, py], [px, py + TH], [px, py + TH + d], [px + TW, py + d]], dark ? '#221c15' : '#bdb7a4'); // 右側
+}
+
+function branch(x, y, angle, len, depth, rand){
+  if (depth === 0 || len < 4) return;
+  const x2 = x + Math.cos(angle) * len, y2 = y + Math.sin(angle) * len;
+  ctx.strokeStyle = '#5a4632'; ctx.lineWidth = depth * 1.1; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x2, y2); ctx.stroke();
+  if (depth <= 3){                           // 末端長葉子
+    ctx.fillStyle = `hsl(${95 + rand() * 35} ${45 + rand() * 25}% ${32 + rand() * 22}%)`;
+    ctx.beginPath(); ctx.arc(x2, y2, 7 + rand() * 9, 0, 7); ctx.fill();
+  }
+  const spread = 0.45 + rand() * 0.35;
+  branch(x2, y2, angle - spread, len * (0.7 + rand() * 0.12), depth - 1, rand);
+  branch(x2, y2, angle + spread, len * (0.7 + rand() * 0.12), depth - 1, rand);
+  if (rand() > 0.7) branch(x2, y2, angle + (rand() - 0.5) * 0.3, len * 0.6, depth - 1, rand);
+}
+
+function render(text){
+  const qr = qrcode(0, 'H');                 // H = 30% 容錯，樹遮住的模組靠它補回來
+  qr.addData(text); qr.make();
+  const n = qr.getModuleCount(), mid = (n - 1) / 2;
+  ctx.clearRect(0, 0, c.width, c.height);
+  for (let s = 0; s < 2 * n; s++)            // 由後往前畫（畫家演算法）
+    for (let x = 0; x < n; x++){
+      const y = s - x;
+      if (y >= 0 && y < n) tile(x - mid, y - mid, qr.isDark(y, x));
+    }
+  const rand = rng(hash(text));
+  const [tx, ty] = iso(0, 0, LIFT);
+  branch(tx, ty, -Math.PI / 2, 95, 9, rand); // 樹從 QR 正中央長出來
+}
+
+t.oninput = () => render(t.value || ' ');
+render(t.value);
+</script>
